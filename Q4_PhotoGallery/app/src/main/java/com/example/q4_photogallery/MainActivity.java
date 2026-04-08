@@ -1,9 +1,12 @@
-package com.example.q4_photogallery; // APNA PACKAGE NAME MATCH KAR LENA
+package com.example.q4_photogallery; // APNA PACKAGE NAME ZAROOR CHECK KARNA
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.Environment;
 import android.provider.MediaStore;
 import android.view.View;
 import android.view.ViewGroup;
@@ -11,140 +14,176 @@ import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.GridView;
 import android.widget.ImageView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
+import androidx.documentfile.provider.DocumentFile;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
 
 public class MainActivity extends AppCompatActivity {
 
-    Button btnCapture;
+    Button btnChooseFolder, btnTakePic;
+    TextView tvFolderName;
     GridView gridView;
-    File currentPhotoFile;
-    File[] allPhotos; // Phone mein save saari photos ki list
-    PhotoAdapter adapter;
+    Uri chosenFolderUri = null;
+    File tempCameraFile;
+    ArrayList<DocumentFile> imageFiles = new ArrayList<>();
+    GalleryAdapter adapter;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        btnCapture = findViewById(R.id.btnCapturePhoto);
-        gridView = findViewById(R.id.photoGridView);
+        btnChooseFolder = findViewById(R.id.btnChooseFolder);
+        btnTakePic = findViewById(R.id.btnTakePic);
+        tvFolderName = findViewById(R.id.tvFolderName);
+        gridView = findViewById(R.id.gridView);
 
-        adapter = new PhotoAdapter();
+        adapter = new GalleryAdapter();
         gridView.setAdapter(adapter);
 
-        // Jab app khule, purani photos load kar lo
-        loadPhotos();
+        btnChooseFolder.setOnClickListener(v -> {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            folderLauncher.launch(intent);
+        });
 
-        // Take Photo Button ka kaam
-        btnCapture.setOnClickListener(v -> openCamera());
+        // ==========================================
+        // BUG FIX: CAMERA PERMISSION LOGIC ADDED
+        // ==========================================
+        btnTakePic.setOnClickListener(v -> {
+            if (chosenFolderUri == null) {
+                Toast.makeText(this, "Please choose a folder first!", Toast.LENGTH_SHORT).show();
+                return;
+            }
 
-        // Jab user kisi photo par click kare (View aur Delete karne ke liye)
+            // Check karo ki Camera permission mili hui hai ya nahi
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                openCamera(); // Agar permission hai, toh camera kholo
+            } else {
+                // Agar nahi hai, toh user se popup me permission mango
+                requestPermissionLauncher.launch(Manifest.permission.CAMERA);
+            }
+        });
+
         gridView.setOnItemClickListener((parent, view, position, id) -> {
-            showPhotoDetailDialog(allPhotos[position]);
+            Intent detailIntent = new Intent(MainActivity.this, ImageDetailActivity.class);
+            detailIntent.putExtra("IMAGE_URI", imageFiles.get(position).getUri().toString());
+            startActivity(detailIntent);
         });
     }
 
-    // ==========================================
-    // 1. CAMERA SE PHOTO LENA
-    // ==========================================
-    private void openCamera() {
-        // Ek khali file banao jahan photo save hogi
-        String fileName = "IMG_" + System.currentTimeMillis() + ".jpg";
-        File storageDirectory = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-        currentPhotoFile = new File(storageDirectory, fileName);
-
-        // FileProvider se us file ka secure link banao
-        Uri imageUri = FileProvider.getUriForFile(this, getPackageName() + ".provider", currentPhotoFile);
-
-        // Camera open karne ka command
-        Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-        cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, imageUri);
-        cameraLauncher.launch(cameraIntent);
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (chosenFolderUri != null) loadImagesFromFolder();
     }
 
-    // Camera jab photo kheench kar wapas aaye
-    ActivityResultLauncher<Intent> cameraLauncher = registerForActivityResult(
-            new ActivityResultContracts.StartActivityForResult(),
-            result -> {
-                if (result.getResultCode() == RESULT_OK) {
-                    Toast.makeText(this, "Photo Saved!", Toast.LENGTH_SHORT).show();
-                    loadPhotos(); // Nayi photo aane par gallery refresh karo
+    // Permission maangne wala popup launcher
+    ActivityResultLauncher<String> requestPermissionLauncher = registerForActivityResult(
+            new ActivityResultContracts.RequestPermission(),
+            isGranted -> {
+                if (isGranted) {
+                    openCamera(); // Allow dabaya toh camera kholo
+                } else {
+                    Toast.makeText(this, "Camera permission is required to take photos!", Toast.LENGTH_LONG).show();
                 }
             }
     );
 
-    // ==========================================
-    // 2. GALLERY MEIN PHOTOS LOAD KARNA
-    // ==========================================
-    private void loadPhotos() {
-        File storageDirectory = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-        if (storageDirectory != null) {
-            allPhotos = storageDirectory.listFiles(); // Folder se saari files utha li
-            adapter.notifyDataSetChanged(); // Grid ko update kiya
-        }
-    }
-
-    // ==========================================
-    // 3. PHOTO DETAILS & DELETE DIALOG
-    // ==========================================
-    private void showPhotoDetailDialog(File photoFile) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Photo Detail");
-        builder.setMessage("Path: " + photoFile.getName() + "\nSize: " + (photoFile.length() / 1024) + " KB");
-
-        // Badi photo dikhane ke liye dialog mein ImageView lagaya
-        ImageView imageView = new ImageView(this);
-        imageView.setImageURI(Uri.fromFile(photoFile));
-        imageView.setPadding(20, 20, 20, 20);
-        builder.setView(imageView);
-
-        // Delete Button
-        builder.setPositiveButton("Delete", (dialog, which) -> {
-            if (photoFile.delete()) {
-                Toast.makeText(this, "Deleted successfully", Toast.LENGTH_SHORT).show();
-                loadPhotos(); // Delete hone ke baad gallery refresh karo
+    ActivityResultLauncher<Intent> folderLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    chosenFolderUri = result.getData().getData();
+                    getContentResolver().takePersistableUriPermission(chosenFolderUri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    DocumentFile pickedDir = DocumentFile.fromTreeUri(this, chosenFolderUri);
+                    tvFolderName.setText("Selected Folder: " + pickedDir.getName());
+                    loadImagesFromFolder();
+                }
             }
-        });
+    );
 
-        // Close Button
-        builder.setNegativeButton("Close", (dialog, which) -> dialog.dismiss());
-        builder.show();
+    private void openCamera() {
+        tempCameraFile = new File(getExternalCacheDir(), "temp_photo.jpg");
+        Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".provider", tempCameraFile);
+        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, uri);
+        cameraLauncher.launch(intent);
     }
 
-    // ==========================================
-    // 4. CUSTOM ADAPTER (Grid ko design se jodne ke liye)
-    // ==========================================
-    class PhotoAdapter extends BaseAdapter {
-        @Override
-        public int getCount() {
-            return (allPhotos != null) ? allPhotos.length : 0;
+    ActivityResultLauncher<Intent> cameraLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                if (result.getResultCode() == RESULT_OK) saveTempFileToChosenFolder();
+            }
+    );
+
+    private void saveTempFileToChosenFolder() {
+        try {
+            DocumentFile pickedDir = DocumentFile.fromTreeUri(this, chosenFolderUri);
+            String newFileName = "IMG_" + System.currentTimeMillis() + ".jpg";
+            DocumentFile newImage = pickedDir.createFile("image/jpeg", newFileName);
+
+            OutputStream out = getContentResolver().openOutputStream(newImage.getUri());
+            InputStream in = new FileInputStream(tempCameraFile);
+            byte[] buffer = new byte[1024];
+            int len;
+            while ((len = in.read(buffer)) > 0) { out.write(buffer, 0, len); }
+            in.close(); out.close();
+
+            tempCameraFile.delete();
+            loadImagesFromFolder();
+        } catch (Exception e) { e.printStackTrace(); }
+    }
+
+    private void loadImagesFromFolder() {
+        imageFiles.clear();
+        DocumentFile pickedDir = DocumentFile.fromTreeUri(this, chosenFolderUri);
+        if (pickedDir != null) {
+            for (DocumentFile file : pickedDir.listFiles()) {
+                if (file.getType() != null && file.getType().startsWith("image/")) {
+                    imageFiles.add(file);
+                }
+            }
         }
+        adapter.notifyDataSetChanged();
+    }
 
+    class GalleryAdapter extends BaseAdapter {
         @Override
-        public Object getItem(int position) { return allPhotos[position]; }
-
+        public int getCount() { return imageFiles.size(); }
+        @Override
+        public Object getItem(int position) { return imageFiles.get(position); }
         @Override
         public long getItemId(int position) { return position; }
 
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
             if (convertView == null) {
-                // grid_item.xml ko utha kar yahan load karo
                 convertView = getLayoutInflater().inflate(R.layout.grid_item, parent, false);
             }
+            ImageView img = convertView.findViewById(R.id.imgItem);
 
-            ImageView imgView = convertView.findViewById(R.id.gridImageView);
-            // File ko image URI mein badal kar box mein set kar do
-            imgView.setImageURI(Uri.fromFile(allPhotos[position]));
-
+            try {
+                InputStream is = getContentResolver().openInputStream(imageFiles.get(position).getUri());
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inSampleSize = 8;
+                Bitmap bmp = BitmapFactory.decodeStream(is, null, options);
+                img.setImageBitmap(bmp);
+                is.close();
+            } catch (Exception e) { e.printStackTrace(); }
             return convertView;
         }
     }
